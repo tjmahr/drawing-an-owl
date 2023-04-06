@@ -8,11 +8,12 @@ equations in their paper.
 Below is the likelihood contribution for one individual in the basic
 linear mixed model that we know and love:
 
-$$
+$$\displaylines{
+
 L_i = \phi_i(Y_i; \theta_1) \\
 \phi: \textrm{MVN density} \\
 i: \textrm{individuals}
-$$
+}$$
 
 When there are $G$ latent classes, the likelihood becomes a weighted sum
 of class-specific likelihoods:

@@ -14,20 +14,20 @@ knitr::opts_chunk$set(echo = TRUE)
 Below is the likelihood contribution for one individual in the basic linear
 mixed model that we know and love:
 
-$$
+$$\displaylines{
 L_i = \phi_i(Y_i; \theta_1) \\
 \phi: \textrm{MVN density} \\
 i: \textrm{individuals}
-$$
+}$$
 
 When there are $G$ latent classes, the likelihood becomes a weighted sum of
 class-specific likelihoods:
 
-$$
+$$\displaylines{
 L_i(\theta_G) = \sum_{g=1}^G \pi_{ig}\phi_{ig}(Y_i|c_i = g; \theta_G) \\
 \pi_{ig}: \textrm{probability of group membership for an individual} \\
 g: \textrm{groups}
-$$
+}$$
 So, an individual makes $G$ contributions to the likelihood and each one is
 weighted by their group membership probability. And when there is one group,
 this equation reduces to the first likelihood equation.
