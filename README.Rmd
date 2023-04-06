@@ -1,5 +1,5 @@
 ---
-title: "Untitled"
+title: "Latent class mixed effects models"
 bibliography: refs.bib
 output: github_document
 ---
@@ -8,27 +8,32 @@ output: github_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-@JSSv078i02 describes the statistical machinery for their latent class mixed models. We note the following equations in their paper.
+## Background
+
+@JSSv078i02 describe the statistical machinery for their latent class mixed
+models. We note the following equations from their paper.
 
 Below is the likelihood contribution for one individual in the basic linear
 mixed model that we know and love:
 
-```{math}
+$$
 \displaylines{
 L_i = \phi_i(Y_i; \theta_1) \\
 \phi: \textrm{MVN density} \\
-i: \textrm{individuals}
+i: \textrm{individual index}
 }
-```
+$$
 
 When there are $G$ latent classes, the likelihood becomes a weighted sum of
 class-specific likelihoods:
 
-$$\displaylines{
+$$
+\displaylines{
 L_i(\theta_G) = \sum_{g=1}^G \pi_{ig}\phi_{ig}(Y_i|c_i = g; \theta_G) \\
 \pi_{ig}: \textrm{probability of group membership for an individual} \\
-g: \textrm{groups}
-}$$
+g: \textrm{group index}
+}
+$$
 
 
 So, an individual makes $G$ contributions to the likelihood and each one is
@@ -38,5 +43,106 @@ this equation reduces to the first likelihood equation.
 Finally, group probabilities are defined as a multinomial logistic model:
 
 $$
-\pi_{ig} = P(c_i = g | X_{ci}) = \frac{{}}{}
+\displaylines{
+\pi_{ig} = P(c_i = g | X_{ci}) = \frac{e^{\xi_{0g} +X^{\top}_{ci}\xi_{1g}}}{\sum^{G}_{l=1}e^{\xi_{0l} +X^{\top}_{ci}\xi_{1l}}}
+} \\
+c_i : \textrm{the latent class for an individual} \\
+X_{ci} : \textrm{time-indpendent covariates} \\
+\xi_{0g} +X^{\top}_{ci}\xi_{1g} : \textrm{linear model for group membership}
+
 $$
+
+## sketch
+
+- stan code for a random-intercept with no latent groups model
+- update said model to have latent groups
+
+```{r, eval=FALSE}
+m <- cmdstanr::cmdstan_model("1.stan")
+
+d <- list(
+  n_obs = n_obs,
+  n_ind = length(individuals),
+  jj = observation_to_individual,
+  n_groups = groups,
+  y = observations
+)
+e <- m$sample(d)
+e_sum <- e$summary()
+
+e_sum |> 
+  filter(variable |> startsWith("b")) |> 
+  mutate(variable = readr::parse_number(variable)) |> 
+  ggplot() + 
+  aes(x = variable) + 
+  geom_pointrange(aes(y = mean, ymin = q5, ymax = q95)) +
+  geom_point(
+    aes(y = y),
+    tibble(y = observations - mean(observations), variable = observation_to_individual),
+    color = "blue"
+  )
+e_sum |> tail()
+
+```
+
+
+
+
+## A random intercept model
+
+Each group has their own mean.
+
+```{r, fig.width = 3, fig.height = 3}
+individuals <- 1:40
+n_obs <- 200
+groups <- 3
+overall_sigma <- 1
+
+individual_to_group <- sample(seq_len(groups), length(individuals), replace = TRUE)
+observation_to_individual <- sample(individuals, n_obs, replace = TRUE)
+observation_to_group <- individual_to_group[observation_to_individual]
+
+group_population_means <- seq_len(groups) * 2
+group_population_sigmas <- rep(.5, groups)
+
+individual_means <- rnorm(
+  length(individuals),
+  group_population_means[individual_to_group],
+  group_population_sigmas[individual_to_group]
+)
+
+observations <- rnorm(
+  n_obs,
+  individual_means[observation_to_individual], 
+  overall_sigma
+)
+
+library(tidyverse)
+d <- tibble(
+  y = observations,
+  i = observation_to_individual,
+  ci = observation_to_group
+)
+
+ggplot(d) + 
+  aes(x = i, y = y) + 
+  geom_point(aes(color = factor(ci))) +
+  stat_smooth(
+    aes(color = factor(ci)),
+    data = function(x) x |> group_by(ci, i) |> summarise(y = mean(y)),
+    method = "lm",
+    formula = y ~ 1
+  )
+
+d |> 
+  group_by(ci) |> 
+  summarise(mean(y), sd(y))
+
+# means[]
+# rnorm()
+
+means[assignments]
+sigmas[assignments]
+
+```
+
