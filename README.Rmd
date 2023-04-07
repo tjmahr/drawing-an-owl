@@ -5,16 +5,23 @@ output: github_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  collapse = TRUE, 
+  dpi = 300,
+  out.width = "40%"
+)
+library(tidyverse)
+
 ```
 
 ## Background
 
-@JSSv078i02 describe the statistical machinery for their latent class mixed
-models. We note the following equations from their paper.
+@JSSv078i02 describe the statistical machinery for their latent class
+mixed models. We note the following equations from their paper.
 
-Below is the likelihood contribution for one individual in the basic linear
-mixed model that we know and love:
+Below is the likelihood contribution for one individual in the basic
+linear mixed model that we know and love:
 
 $$
 \displaylines{
@@ -24,8 +31,8 @@ i: \textrm{individual index}
 }
 $$
 
-When there are $G$ latent classes, the likelihood becomes a weighted sum of
-class-specific likelihoods:
+When there are $G$ latent classes, the likelihood becomes a weighted sum
+of class-specific likelihoods:
 
 $$
 \displaylines{
@@ -36,52 +43,141 @@ g: \textrm{group index}
 $$
 
 
-So, an individual makes $G$ contributions to the likelihood and each one is
-weighted by their group membership probability. And when there is one group,
-this equation reduces to the first likelihood equation.
+So, an individual makes $G$ contributions to the likelihood and each one
+is weighted by their group membership probability. And when there is one
+group, this equation reduces to the first likelihood equation.
 
-Finally, group probabilities are defined as a multinomial logistic model:
+Finally, group probabilities are defined as a multinomial logistic
+model:
 
 $$
 \displaylines{
-\pi_{ig} = P(c_i = g | X_{ci}) = \frac{e^{\xi_{0g} +X^{\top}_{ci}\xi_{1g}}}{\sum^{G}_{l=1}e^{\xi_{0l} +X^{\top}_{ci}\xi_{1l}}}
-} \\
+\pi_{ig} = 
+  P(c_i = g | X_{ci}) = 
+  \frac{
+    e^{\xi_{0g} +X^{\top}_{ci}\xi_{1g}}
+  }{
+    \sum^{G}_{l=1}e^{\xi_{0l} +X^{\top}_{ci}\xi_{1l}}
+  } \\
 c_i : \textrm{the latent class for an individual} \\
 X_{ci} : \textrm{time-indpendent covariates} \\
 \xi_{0g} +X^{\top}_{ci}\xi_{1g} : \textrm{linear model for group membership}
-
+}
 $$
 
 ## sketch
 
-- stan code for a random-intercept with no latent groups model
-- update said model to have latent groups
+  - stan code for a random-intercept with no latent groups model
+  - update said model to have latent groups
 
-```{r, eval=FALSE}
+Simulate some repeated measures data. There is no latent group effects.
+Happy with the idea of storing stuff in dataframe and joining at the
+end, not happy with the verbosity.
+
+```{r}
+library(tidyverse)
+rep_along <- function (along, x) rep_len(x, length(along))
+
+n_individuals <- 20
+n_obs <- 100
+n_groups <- 3
+sigma_y <- .2
+
+d_groups <- data.frame(
+  group = seq_len(n_groups),
+  group_mean = 0,
+  group_sigma = 1
+)
+
+d_observations <- data.frame(
+  y = rep_len(NA, n_obs),
+  individual = NA_integer_
+)
+
+d_individuals <- data.frame(
+  individual = seq_len(n_individuals),
+  group = NA_integer_,
+  individual_mean = NA_real_
+)
+
+d_individuals$group <- sample(
+  seq_len(n_groups), 
+  n_individuals, 
+  replace = TRUE
+)
+
+d_observations$individual <- sample(
+  d_individuals$individual, 
+  n_obs, 
+  replace = TRUE
+)
+
+d_individuals$individual_mean <- rnorm(
+  n_individuals,
+  d_groups$group_mean[d_individuals$group],
+  d_groups$group_sigma[d_individuals$group]
+)
+
+d_observations$y <- rnorm(
+  n_obs,
+  d_individuals$individual_mean[d_observations$individual], 
+  sigma_y
+)
+
+list(d_groups, d_individuals, d_observations) |> lapply(head)
+
+d <- d_observations |> 
+  left_join(d_individuals, by = join_by(individual)) |> 
+  left_join(d_groups, by = join_by(group))
+```
+
+Run a simple stan model and check that it recovers the parameters.
+
+```{r simple-ri-model, fig.width = 3, fig.height = 3}
 m <- cmdstanr::cmdstan_model("1.stan")
 
-d <- list(
+data <- list(
   n_obs = n_obs,
-  n_ind = length(individuals),
-  jj = observation_to_individual,
-  n_groups = groups,
-  y = observations
+  n_ind = n_individuals,
+  individual = d$individual,
+  n_groups = n_groups,
+  y = d$y
 )
-e <- m$sample(d)
+e <- m$sample(data, refresh = 0)
 e_sum <- e$summary()
 
-e_sum |> 
+d_post_individuals <- e_sum |> 
   filter(variable |> startsWith("b")) |> 
-  mutate(variable = readr::parse_number(variable)) |> 
-  ggplot() + 
-  aes(x = variable) + 
-  geom_pointrange(aes(y = mean, ymin = q5, ymax = q95)) +
+  mutate(individual = readr::parse_number(variable)) |> 
+  left_join(d_individuals, by = join_by(individual))
+
+ggplot(d_post_individuals) + 
+  aes(x = individual) + 
+  geom_linerange(aes(ymin = q5, ymax = q95)) +
   geom_point(
-    aes(y = y),
-    tibble(y = observations - mean(observations), variable = observation_to_individual),
-    color = "blue"
+    aes(y = individual_mean),
+    color = "blue",
+    size = 3,
+    alpha = .3
   )
-e_sum |> tail()
+
+e_sum |> 
+  filter(variable %in% c("alpha", "sigma_b", "sigma_y")) |> 
+  left_join(
+    tibble(
+      variable = c("alpha", "sigma_b", "sigma_y"),
+      value = c(0, 1, sigma_y)
+    )
+  ) |> 
+  ggplot() + 
+    aes(x = variable) + 
+    geom_linerange(aes(ymin = q5, ymax = q95)) +
+    geom_point(
+      aes(y = value),
+      color = "blue",
+      size = 3,
+      alpha = .3
+    )
 
 ```
 
@@ -92,37 +188,7 @@ e_sum |> tail()
 
 Each group has their own mean.
 
-```{r, fig.width = 3, fig.height = 3}
-individuals <- 1:40
-n_obs <- 200
-groups <- 3
-overall_sigma <- 1
-
-individual_to_group <- sample(seq_len(groups), length(individuals), replace = TRUE)
-observation_to_individual <- sample(individuals, n_obs, replace = TRUE)
-observation_to_group <- individual_to_group[observation_to_individual]
-
-group_population_means <- seq_len(groups) * 2
-group_population_sigmas <- rep(.5, groups)
-
-individual_means <- rnorm(
-  length(individuals),
-  group_population_means[individual_to_group],
-  group_population_sigmas[individual_to_group]
-)
-
-observations <- rnorm(
-  n_obs,
-  individual_means[observation_to_individual], 
-  overall_sigma
-)
-
-library(tidyverse)
-d <- tibble(
-  y = observations,
-  i = observation_to_individual,
-  ci = observation_to_group
-)
+```{r, fig.width = 3, fig.height = 3, eval = FALSE}
 
 ggplot(d) + 
   aes(x = i, y = y) + 

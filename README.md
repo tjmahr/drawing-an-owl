@@ -1,8 +1,6 @@
 Latent class mixed effects models
 ================
 
-<!-- README.md is generated from README.Rmd. Please edit that file -->
-
 ## Background
 
 Proust-Lima, Philipps, and Liquet (2017) describe the statistical
@@ -38,79 +36,218 @@ group, this equation reduces to the first likelihood equation.
 Finally, group probabilities are defined as a multinomial logistic
 model:
 
-\$\$ \\ c_i : \\ X\_{ci} : \\ *{0g} +X^{}*{ci}\_{1g} :
+$$
+\displaylines{
+\pi_{ig} = 
+  P(c_i = g | X_{ci}) = 
+  \frac{
+    e^{\xi_{0g} +X^{\top}_{ci}\xi_{1g}}
+  }{
+    \sum^{G}_{l=1}e^{\xi_{0l} +X^{\top}_{ci}\xi_{1l}}
+  } \\
+c_i : \textrm{the latent class for an individual} \\
+X_{ci} : \textrm{time-indpendent covariates} \\
+\xi_{0g} +X^{\top}_{ci}\xi_{1g} : \textrm{linear model for group membership}
+}
+$$
 
-\$\$
+## sketch
+
+- stan code for a random-intercept with no latent groups model
+- update said model to have latent groups
+
+Simulate some repeated measures data. There is no latent group effects.
+Happy with the idea of storing stuff in dataframe and joining at the
+end, not happy with the verbosity.
+
+``` r
+library(tidyverse)
+rep_along <- function (along, x) rep_len(x, length(along))
+
+n_individuals <- 20
+n_obs <- 100
+n_groups <- 3
+sigma_y <- .2
+
+d_groups <- data.frame(
+  group = seq_len(n_groups),
+  group_mean = 0,
+  group_sigma = 1
+)
+
+d_observations <- data.frame(
+  y = rep_len(NA, n_obs),
+  individual = NA_integer_
+)
+
+d_individuals <- data.frame(
+  individual = seq_len(n_individuals),
+  group = NA_integer_,
+  individual_mean = NA_real_
+)
+
+d_individuals$group <- sample(
+  seq_len(n_groups), 
+  n_individuals, 
+  replace = TRUE
+)
+
+d_observations$individual <- sample(
+  d_individuals$individual, 
+  n_obs, 
+  replace = TRUE
+)
+
+d_individuals$individual_mean <- rnorm(
+  n_individuals,
+  d_groups$group_mean[d_individuals$group],
+  d_groups$group_sigma[d_individuals$group]
+)
+
+d_observations$y <- rnorm(
+  n_obs,
+  d_individuals$individual_mean[d_observations$individual], 
+  sigma_y
+)
+
+list(d_groups, d_individuals, d_observations) |> lapply(head)
+## [[1]]
+##   group group_mean group_sigma
+## 1     1          0           1
+## 2     2          0           1
+## 3     3          0           1
+## 
+## [[2]]
+##   individual group individual_mean
+## 1          1     3      0.09702619
+## 2          2     3      0.32684195
+## 3          3     2      0.78246552
+## 4          4     2     -0.36829325
+## 5          5     1     -0.95848969
+## 6          6     2     -1.02811570
+## 
+## [[3]]
+##             y individual
+## 1  0.82928097         18
+## 2  0.48090736         19
+## 3 -1.58752103          9
+## 4  0.09277332          2
+## 5 -0.21724128          4
+## 6  0.54669097         18
+
+d <- d_observations |> 
+  left_join(d_individuals, by = join_by(individual)) |> 
+  left_join(d_groups, by = join_by(group))
+```
+
+Run a simple stan model and check that it recovers the parameters.
+
+``` r
+m <- cmdstanr::cmdstan_model("1.stan")
+
+data <- list(
+  n_obs = n_obs,
+  n_ind = n_individuals,
+  individual = d$individual,
+  n_groups = n_groups,
+  y = d$y
+)
+e <- m$sample(data, refresh = 0)
+## Running MCMC with 4 sequential chains...
+## 
+## Chain 1 finished in 0.4 seconds.
+## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpANG1E7/model-43e43e61440f.stan', line 21, column 2 to column 25)
+## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 2
+## Chain 2 finished in 0.3 seconds.
+## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpANG1E7/model-43e43e61440f.stan', line 23, column 2 to column 45)
+## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 3
+## Chain 3 finished in 0.3 seconds.
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpANG1E7/model-43e43e61440f.stan', line 21, column 2 to column 25)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 4 finished in 0.4 seconds.
+## 
+## All 4 chains finished successfully.
+## Mean chain execution time: 0.3 seconds.
+## Total execution time: 1.8 seconds.
+e_sum <- e$summary()
+
+d_post_individuals <- e_sum |> 
+  filter(variable |> startsWith("b")) |> 
+  mutate(individual = readr::parse_number(variable)) |> 
+  left_join(d_individuals, by = join_by(individual))
+
+ggplot(d_post_individuals) + 
+  aes(x = individual) + 
+  geom_linerange(aes(ymin = q5, ymax = q95)) +
+  geom_point(
+    aes(y = individual_mean),
+    color = "blue",
+    size = 3,
+    alpha = .3
+  )
+```
+
+<img src="README_files/figure-gfm/simple-ri-model-1.png" width="40%" />
+
+``` r
+
+e_sum |> 
+  filter(variable %in% c("alpha", "sigma_b", "sigma_y")) |> 
+  left_join(
+    tibble(
+      variable = c("alpha", "sigma_b", "sigma_y"),
+      value = c(0, 1, sigma_y)
+    )
+  ) |> 
+  ggplot() + 
+    aes(x = variable) + 
+    geom_linerange(aes(ymin = q5, ymax = q95)) +
+    geom_point(
+      aes(y = value),
+      color = "blue",
+      size = 3,
+      alpha = .3
+    )
+## Joining with `by = join_by(variable)`
+```
+
+<img src="README_files/figure-gfm/simple-ri-model-2.png" width="40%" />
 
 ## A random intercept model
 
-Repeated measuresments within each individual. Each group has their own
-mean. There is one population for the varying effects.
+Each group has their own mean.
 
 ``` r
-individuals <- 1:40
-n_obs <- 200
-groups <- 3
-overall_sigma <- 1
-
-individual_to_group <- sample(seq_len(groups), length(individuals), replace = TRUE)
-observation_to_individual <- sample(individuals, n_obs, replace = TRUE)
-observation_to_group <- individual_to_group[observation_to_individual]
-
-group_population_means <- seq_len(groups) * 2
-group_population_sigmas <- rep(.5, groups)
-
-individual_means <- rnorm(
-  length(individuals),
-  group_population_means[individual_to_group],
-  group_population_sigmas[individual_to_group]
-)
-
-observations <- rnorm(
-  n_obs,
-  individual_means[observation_to_individual], 
-  overall_sigma
-)
-
-library(tidyverse)
-d <- tibble(
-  y = observations,
-  i = observation_to_individual,
-  ci = observation_to_group
-)
 
 ggplot(d) + 
   aes(x = i, y = y) + 
   geom_point(aes(color = factor(ci))) +
   stat_smooth(
     aes(color = factor(ci)),
-    data = function(x) { 
-      x |> 
-        group_by(ci, i) |> 
-        summarise(y = mean(y), .groups = "drop")
-    },
+    data = function(x) x |> group_by(ci, i) |> summarise(y = mean(y)),
     method = "lm",
     formula = y ~ 1
-  ) +
-  guides(color = "none")
-```
-
-<img src="man/figures/README-unnamed-chunk-2-1.png" width="50%" />
-
-``` r
+  )
 
 d |> 
   group_by(ci) |> 
   summarise(mean(y), sd(y))
-#> # A tibble: 3 × 3
-#>      ci `mean(y)` `sd(y)`
-#>   <int>     <dbl>   <dbl>
-#> 1     1      2.04   0.941
-#> 2     2      4.05   1.13 
-#> 3     3      5.86   1.01
-```
 
-## References
+# means[]
+# rnorm()
+
+means[assignments]
+sigmas[assignments]
+```
 
 <div id="refs" class="references csl-bib-body hanging-indent">
 
