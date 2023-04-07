@@ -3,7 +3,7 @@ data{
   int<lower=1> n_ind;  // individuals
   array[n_obs] int<lower=1, upper=n_ind> individual;
 
-  int<lower=1> n_groups;  // latent groups
+  // int<lower=1> n_groups;  // latent groups
 
   array[n_obs] real y;
 
@@ -21,4 +21,8 @@ model {
   b ~ normal(0, sigma_b);
 
   y ~ normal(alpha + b[individual], sigma_y);
+}
+generated quantities{
+  // following the idea in lme4 that coef() is fixef() + ranef()
+  vector[n_ind] coef_b = alpha + b;
 }
