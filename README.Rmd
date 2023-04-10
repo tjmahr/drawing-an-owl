@@ -298,7 +298,17 @@ ggplot(d_post_individuals) +
   )
 ```
 
-```{r}
-
+```{r, eval = FALSE}
+m <- cmdstanr::cmdstan_model("2.stan")
+data <- list(
+  n_obs = nrow(d),
+  n_ind = length(unique(d$individual)),
+  individual = d$individual,
+  n_groups = length(unique(d$group)),
+  y = d$y
+)
+e <- m$sample(data, refresh = 0)
+e_sum <- e$summary()
+e_sum |> print(n = Inf)
 ```
 
