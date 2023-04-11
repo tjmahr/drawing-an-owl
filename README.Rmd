@@ -68,6 +68,129 @@ X_{ci} : \textrm{time-indpendent covariates} \\
 }
 $$
 
+## stan notes
+
+Richard McElreath has a
+[tutorial](https://elevanth.org/blog/2018/01/29/algebra-and-missingness/)
+where observations are in different states but for some observations,
+that state is missing/unobserved. He provides following recipe for how 
+work with discrete parameters in Stan:
+
+> 
+> (1) Write the probability of an outcome `y[i]` conditional on known values
+> of the discrete parameters. Call this $L$, the conditional likelihood.
+> 
+> (2) List all the possible states the discrete parameters could take. For
+> example, if you have two binary parameters, then there are four possible
+> states: 11, 10, 01, and 00. Let $j$ be an index for state, so that in
+> this example $j$ can take the values 1, 2, 3, and 4.
+> 
+> (3) For each state in (2), compute the probability of that state. Your
+> model provides these probabilities, and they will depend upon the
+> details of your model. Call each state's probability $P_j$.
+> 
+> (4) For each state in (2), compute the probability of an outcome `y[i]`
+> when the discrete parameters take on those values. For example, there is
+> a different probability for each of 11, 10, 01, and 00. You can use the
+> expression from (1) and just insert the values of the parameters for
+> each state. Call each state's corresponding likelihood $L_j$.
+> 
+> (5) Now you can compute the unconditional probability of `y[i]` by
+> multiplying each $P_j$ by $L_j$. Then sum these products for all
+> states: $M=\sum_j P_j L_j$. This $M$ is the marginal likelihood, the
+> probability of `y[i]` averaging over the unknown values of the discrete
+> parameters.
+> 
+> In the actual code, we must do all of the above on the log-probability
+> scale, or otherwise numerical precision will be poor. So in practice
+> each $P_j L_j$ term is computed as a sum of log probabilities:
+> `term[j] = logP[j] + logL[j]`. And then we can compute $\log M$ as
+> `log_sum_exp(term).`
+
+So following that recipe and the notes from the lcmm package, I can do a simple 
+latent class model in Stan:
+
+```{embed, file="0.stan"}
+```
+
+Let's try to replicate the [Gaussian Mixture Model
+demo](https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html)
+from PyMC.
+
+```{r, eval = FALSE}
+# copy the example from 
+n_groups <- 3
+n_obs <- 500
+means <- c(-5, 0, 5)
+sds = c(0.5, 2.0, 0.75)
+ids <- sample(1:n_groups, n_obs, replace = TRUE)
+y <- rnorm(n_obs, means[ids], sds[ids])
+
+m <- cmdstanr::cmdstan_model("0.stan")
+
+data <- list(
+  n_obs = length(y),
+  n_groups = 3,
+  y = y
+)
+
+# I wonder if the generated quantities are making this kind of slow.
+e <- m$sample(data, refresh = 0)
+e_sum <- e$summary()
+e_sum
+
+library(dplyr)
+library(ggplot2)
+
+p <- ggplot(tibble(x = y)) + 
+  aes(x = x) + 
+  geom_point(
+    aes(y = 0), 
+    position = position_jitter(width = 0, height = .2)
+  ) + 
+  ylim(-.4, .4) +
+  ggtitle("data") +
+  xlab("observed value") +
+  ylab("(jittered)")
+
+x <- e$draws() |> 
+  posterior::as_draws_df() |>
+  as_tibble() |> 
+  select(
+    .draw, 
+    starts_with("mean_"), 
+    starts_with("probs"), 
+    starts_with("sigma")
+  ) |> 
+  tidyr::pivot_longer(
+    cols = c(-.draw), 
+    names_pattern = "(.+)\\[(\\d+)\\]",
+    names_to = c("family", "index")
+  ) |> 
+  mutate(parameter = sprintf("%s[%s]", family, index))
+
+p2 <- ggplot(x) + 
+  aes(x = value, y = index) + 
+  ggdist::stat_slab() + 
+  facet_wrap("family", scales = "free") +
+  ggtitle("model")
+
+library(patchwork)
+p + p2 + plot_layout(widths = c(1, 2))
+
+# bayesplot::mcmc_intervals(
+#   e$draws(), 
+#   vars(starts_with("mean_group"), starts_with("probs"))
+# ) + facet_wrap(~ startsWith(parameter, "prob"))
+# bayesplot::mcmc_trace(e$draws())
+
+```
+
+
+
+
+
+
 ## sketch
 
   - stan code for a random-intercept with no latent groups model
@@ -311,4 +434,3 @@ e <- m$sample(data, refresh = 0)
 e_sum <- e$summary()
 e_sum |> print(n = Inf)
 ```
-
