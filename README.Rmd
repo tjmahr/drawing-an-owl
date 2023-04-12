@@ -18,7 +18,19 @@ if (!is.null(knitr::pandoc_to())) {
 }
 ```
 
+
+This document/repository is an exercise in me "drawing the owl", a
+phrase used by Richard McElreath in the [Statistical
+Rethinking](https://www.youtube.com/watch?v=FdnMWdICdRs&list=PLDcUM9US4XdPz-KxHM4XHt7uUVGWWVSus)
+course to describe the process of the model development. This statistical workflow involves
+simulating data, creating statistical models to infer the unobserved
+parameters that generated the simulate data, and gradually building up
+the model's complexity. And we do this model development *before* we 
+plug the real data into the model.
+
 ## Background
+
+
 
 @JSSv078i02 describe the statistical machinery for their latent class
 mixed models. We note the following equations from their paper.
