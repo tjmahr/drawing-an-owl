@@ -119,18 +119,25 @@ work with discrete parameters in Stan:
 > `term[j] = logP[j] + logL[j]`. And then we can compute $\log M$ as
 > `log_sum_exp(term).`
 
-So following that recipe and the notes from the lcmm package, I can do a simple 
+
+## A Gaussian mixture model
+
+Following that recipe and the notes from the lcmm package, I can do a simple 
 latent class model in Stan:
 
 ```{embed, file="0.stan"}
 ```
+
+In the double for-loop in the model block, we perform the marginalization recipe. We iterate through
+the observations and compute weighted likelihoods for each
+group by multiplying the group probability times the likelihood
+of the observation in that group. 
 
 Let's try to replicate the [Gaussian Mixture Model
 demo](https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html)
 from PyMC.
 
 ```{r, eval = FALSE}
-# copy the example from 
 n_groups <- 3
 n_obs <- 500
 means <- c(-5, 0, 5)
@@ -138,21 +145,33 @@ sds = c(0.5, 2.0, 0.75)
 ids <- sample(1:n_groups, n_obs, replace = TRUE)
 y <- rnorm(n_obs, means[ids], sds[ids])
 
+true_values <- tibble(
+  parameter = c(
+    sprintf("mean_group[%s]", 1:3),
+    sprintf("probs[%s]", 1:3),
+    sprintf("sigma_group[%s]", 1:3)
+  ),
+  ground = c(
+    means, rep(.33, 3), sds
+  )
+)
+
 m <- cmdstanr::cmdstan_model("0.stan")
 
 data <- list(
   n_obs = length(y),
   n_groups = 3,
-  y = y
+  y = y,
+  will_calculate_probs = 0
 )
 
-# I wonder if the generated quantities are making this kind of slow.
-e <- m$sample(data, refresh = 0)
+e <- m$sample(data, refresh = 0, parallel_chains = 4)
 e_sum <- e$summary()
 e_sum
 
 library(dplyr)
 library(ggplot2)
+
 
 p <- ggplot(tibble(x = y)) + 
   aes(x = x) + 
@@ -164,6 +183,7 @@ p <- ggplot(tibble(x = y)) +
   ggtitle("data") +
   xlab("observed value") +
   ylab("(jittered)")
+
 
 x <- e$draws() |> 
   posterior::as_draws_df() |>
@@ -179,23 +199,28 @@ x <- e$draws() |>
     names_pattern = "(.+)\\[(\\d+)\\]",
     names_to = c("family", "index")
   ) |> 
-  mutate(parameter = sprintf("%s[%s]", family, index))
+  mutate(parameter = sprintf("%s[%s]", family, index)) |> 
+  left_join(true_values, by = "parameter")
+
+
+
 
 p2 <- ggplot(x) + 
   aes(x = value, y = index) + 
-  ggdist::stat_slab() + 
+  ggdist::stat_pointinterval() + 
   facet_wrap("family", scales = "free") +
-  ggtitle("model")
+  geom_point(
+    aes(x = ground, color = "ground truth"), 
+    position = position_nudge(y = .2)
+  ) +
+  ggtitle("model") +
+  guides(color = "none")
+
+p2
+
 
 library(patchwork)
 p + p2 + plot_layout(widths = c(1, 2))
-
-# bayesplot::mcmc_intervals(
-#   e$draws(), 
-#   vars(starts_with("mean_group"), starts_with("probs"))
-# ) + facet_wrap(~ startsWith(parameter, "prob"))
-# bayesplot::mcmc_trace(e$draws())
-
 ```
 
 

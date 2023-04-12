@@ -2,6 +2,7 @@ data {
   int<lower=1> n_obs;  // observations
   int<lower=1> n_groups;  // latent groups
   array[n_obs] real y;
+  int<lower=0,upper=1> will_calculate_probs;
 }
 
 transformed data {}
@@ -33,14 +34,15 @@ model {
 }
 
 generated quantities {
-  matrix[n_obs, n_groups] g_probs;
-  for (i in 1:n_obs) {
-    vector[n_groups] terms;
-    for (j in 1:n_groups) {
-      terms[j] = log(probs[j]) +
-        normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
+  if (will_calculate_probs == 1) {
+    matrix[n_obs, n_groups] g_probs;
+    for (i in 1:n_obs) {
+      vector[n_groups] terms;
+      for (j in 1:n_groups) {
+        terms[j] = log(probs[j]) +
+          normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
+      }
+      g_probs[i, ] = to_row_vector(softmax(terms));
     }
-    g_probs[i, ] = to_row_vector(softmax(terms));
   }
 }
-
