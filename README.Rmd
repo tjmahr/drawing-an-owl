@@ -30,7 +30,46 @@ plug the real data into the model.
 
 ## Background
 
+In @mahr2020, we examined the developmental trajectories of speech
+intelligibility in three groups of children with cerebral palsy: those
+without speech-motor impairment (NSMI), those with speech-motor
+impairment and typical language comprehension (SMI-LCT), and those with
+speech-motor impairment and impaired language comprehension (SMI-LCI).
+We made these groupings based on clinical judgment for NSMI/SMI status
+and language testing for LCT/LCI status. We also tried to make the group
+assignments based on age-4 data whenever possible to look at how the
+prospective/predictive value of the groups on later growth trajectories.
 
+```{r, out.width = "50%", echo = FALSE}
+knitr::include_graphics("previous-paper.png")
+```
+
+The NSMI grouping is very successful: All of the children without
+dysarthria seem following a homogeneous set of trajectories. The SMI-LCT
+grouping seems to two have sets of trajectories: 1) trajectories that
+are more spread out than the NSMI group but do show reliable growth in
+intelligibility, and 2) 4--5 trajectories that show very limited growth.
+The SMI-LCI group is less numerous than the other groups but it seems to
+have a lower average trajectories than the others. 
+
+So, these groupings provide a coarse ordering for severity of
+impairment, but can we do better? Actually, that's not the right
+question: Can we do different? What if instead we tell the statistical
+model that there are K latent subgroups in our sample? Can it identify K
+different groups? Is there evidence in the data for K groups? What about
+K-1 or K+1 groups? Do the model-uncovered groups match up with our
+previously defined groups? Those are just a few of the questions that 
+spring to mind. 
+
+I would like to apply a latent class mixed models approach to our 
+intelligibility trajectories but there is no off-the-shelf solution for 
+this problem, at least not one that can accommodate the nonlinear growth 
+model and beta distribution family I used in my prior analysis. 
+
+## Math of latent class mixed models
+
+The [lcmm](https://cecileproust-lima.github.io/lcmm/) R package provides a maximum-likelihood estimate for gaussian 
+latent class mixed models, so that is a good starting point for understanding these models.
 
 @JSSv078i02 describe the statistical machinery for their latent class
 mixed models. We note the following equations from their paper.
@@ -80,7 +119,8 @@ X_{ci} : \textrm{time-indpendent covariates} \\
 }
 $$
 
-## stan notes
+
+## Marginalization of discrete parameters
 
 Richard McElreath has a
 [tutorial](https://elevanth.org/blog/2018/01/29/algebra-and-missingness/)
@@ -125,19 +165,32 @@ work with discrete parameters in Stan:
 Following that recipe and the notes from the lcmm package, I can do a simple 
 latent class model in Stan:
 
+```{r}
+# knitr::opts_chunk$set(eval = FALSE)
+```
+
+
+```{r}
+m <- cmdstanr::cmdstan_model("0.stan")
+```
+
 ```{embed, file="0.stan"}
 ```
 
-In the double for-loop in the model block, we perform the marginalization recipe. We iterate through
-the observations and compute weighted likelihoods for each
-group by multiplying the group probability times the likelihood
-of the observation in that group. 
+In the double for-loop in the model block, we perform the
+marginalization recipe. We iterate through the observations and compute
+weighted likelihoods for each group by multiplying the group probability
+times the likelihood of the observation in that group.
 
 Let's try to replicate the [Gaussian Mixture Model
 demo](https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html)
 from PyMC.
 
-```{r, eval = FALSE}
+```{r}
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
 n_groups <- 3
 n_obs <- 500
 means <- c(-5, 0, 5)
@@ -151,12 +204,89 @@ true_values <- tibble(
     sprintf("probs[%s]", 1:3),
     sprintf("sigma_group[%s]", 1:3)
   ),
-  ground = c(
+  ground_truth = c(
     means, rep(.33, 3), sds
   )
 )
 
-m <- cmdstanr::cmdstan_model("0.stan")
+data <- list(
+  n_obs = length(y),
+  n_groups = 3,
+  y = y,
+  will_calculate_probs = 0
+)
+
+posterior_gmm <- m$sample(data, refresh = 0, parallel_chains = 4)
+```
+
+
+```{r gmm1, fig.height = 3, fig.width = 8, out.width = "100%"}
+tidy_gmm_draws <- function(x) {
+  x$draws() |> 
+    posterior::as_draws_df() |>
+    tibble::as_tibble() |> 
+    select(
+      .draw, .chain,
+      starts_with("mean_"), 
+      starts_with("probs"), 
+      starts_with("sigma")
+    ) |> 
+    tidyr::pivot_longer(
+      cols = c(-.draw, -.chain), 
+      names_pattern = "(.+)\\[(\\d+)\\]",
+      names_to = c("family", "index")
+    ) |> 
+    mutate(parameter = sprintf("%s[%s]", family, index))
+}
+
+draws_gmm <- posterior_gmm |> 
+  tidy_gmm_draws()  |> 
+    left_join(true_values, by = "parameter")
+
+p <- ggplot(tibble(x = y)) + 
+  aes(x = x) + 
+  ggdist::geom_swarm(color = "black") +
+  ggtitle("data") +
+  xlab("observed value") +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+
+p2 <- ggplot(draws_gmm) + 
+  aes(x = value, y = index) + 
+  ggdist::stat_pointinterval() + 
+  facet_wrap("family", scales = "free") +
+  geom_point(
+    aes(x = ground_truth, color = "ground truth"), 
+    position = position_nudge(y = .2),
+    color = "orangered"
+  ) +
+  ggtitle("model") +
+  guides(color = "none")
+
+p + p2 + plot_layout(widths = c(1, 2))
+```
+
+There is another PyMC demo that sets the prevalences of groups too. Let's try 
+that.
+
+```{r gmm2, fig.height = 3, fig.width = 8, out.width = "100%"}
+n_groups <- 3
+n_obs <- 1000
+probs <- c(0.35, 0.4, 0.25)
+means <- c(0.0, 2.0, 5.0)
+sds = c(0.5, 0.5, 1.0)
+ids <- sample(1:n_groups, n_obs, prob = probs, replace = TRUE)
+table(ids) / n_obs
+y <- rnorm(n_obs, means[ids], sds[ids])
+
+true_values <- tibble::tibble(
+  parameter = c(
+    sprintf("mean_group[%s]", 1:3),
+    sprintf("probs[%s]", 1:3),
+    sprintf("sigma_group[%s]", 1:3)
+  ),
+  ground_truth = c(means, probs, sds)
+)
 
 data <- list(
   n_obs = length(y),
@@ -167,64 +297,33 @@ data <- list(
 
 e <- m$sample(data, refresh = 0, parallel_chains = 4)
 e_sum <- e$summary()
-e_sum
 
-library(dplyr)
-library(ggplot2)
-
+draws_gmm <- e |> 
+  tidy_gmm_draws()  |> 
+    left_join(true_values, by = "parameter")
 
 p <- ggplot(tibble(x = y)) + 
   aes(x = x) + 
-  geom_point(
-    aes(y = 0), 
-    position = position_jitter(width = 0, height = .2)
-  ) + 
-  ylim(-.4, .4) +
+  ggdist::geom_swarm(color = "black") +
   ggtitle("data") +
   xlab("observed value") +
-  ylab("(jittered)")
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
 
 
-x <- e$draws() |> 
-  posterior::as_draws_df() |>
-  as_tibble() |> 
-  select(
-    .draw, 
-    starts_with("mean_"), 
-    starts_with("probs"), 
-    starts_with("sigma")
-  ) |> 
-  tidyr::pivot_longer(
-    cols = c(-.draw), 
-    names_pattern = "(.+)\\[(\\d+)\\]",
-    names_to = c("family", "index")
-  ) |> 
-  mutate(parameter = sprintf("%s[%s]", family, index)) |> 
-  left_join(true_values, by = "parameter")
-
-
-
-
-p2 <- ggplot(x) + 
+p2 <- ggplot(draws_gmm) + 
   aes(x = value, y = index) + 
   ggdist::stat_pointinterval() + 
   facet_wrap("family", scales = "free") +
   geom_point(
-    aes(x = ground, color = "ground truth"), 
-    position = position_nudge(y = .2)
+    aes(x = ground_truth, color = "ground truth"), 
+    position = position_nudge(y = .2),
+    color = "orangered"
   ) +
   ggtitle("model") +
   guides(color = "none")
 
-p2
-
-
-library(patchwork)
 p + p2 + plot_layout(widths = c(1, 2))
 ```
-
-
-
 
 
 

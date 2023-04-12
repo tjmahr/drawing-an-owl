@@ -1,7 +1,57 @@
 Latent class mixed effects models
 ================
 
+This document/repository is an exercise in me “drawing the owl”, a
+phrase used by Richard McElreath in the [Statistical
+Rethinking](https://www.youtube.com/watch?v=FdnMWdICdRs&list=PLDcUM9US4XdPz-KxHM4XHt7uUVGWWVSus)
+course to describe the process of the model development. This
+statistical workflow involves simulating data, creating statistical
+models to infer the unobserved parameters that generated the simulate
+data, and gradually building up the model’s complexity. And we do this
+model development *before* we plug the real data into the model.
+
 ## Background
+
+In Mahr, Rathouz, and Hustad (2020), we examined the developmental
+trajectories of speech intelligibility in three groups of children with
+cerebral palsy: those without speech-motor impairment (NSMI), those with
+speech-motor impairment and typical language comprehension (SMI-LCT),
+and those with speech-motor impairment and impaired language
+comprehension (SMI-LCI). We made these groupings based on clinical
+judgment for NSMI/SMI status and language testing for LCT/LCI status. We
+also tried to make the group assignments based on age-4 data whenever
+possible to look at how the prospective/predictive value of the groups
+on later growth trajectories.
+
+<img src="previous-paper.png" width="50%" />
+
+The NSMI grouping is very successful: All of the children without
+dysarthria seem following a homogeneous set of trajectories. The SMI-LCT
+grouping seems to two have sets of trajectories: 1) trajectories that
+are more spread out than the NSMI group but do show reliable growth in
+intelligibility, and 2) 4–5 trajectories that show very limited growth.
+The SMI-LCI group is less numerous than the other groups but it seems to
+have a lower average trajectories than the others.
+
+So, these groupings provide a coarse ordering for severity of
+impairment, but can we do better? Actually, that’s not the right
+question: Can we do different? What if instead we tell the statistical
+model that there are K latent subgroups in our sample? Can it identify K
+different groups? Is there evidence in the data for K groups? What about
+K-1 or K+1 groups? Do the model-uncovered groups match up with our
+previously defined groups? Those are just a few of the questions that
+spring to mind.
+
+I would like to apply a latent class mixed models approach to our
+intelligibility trajectories but there is no off-the-shelf solution for
+this problem, at least not one that can accommodate the nonlinear growth
+model and beta distribution family I used in my prior analysis.
+
+## Math of latent class mixed models
+
+The [lcmm](https://cecileproust-lima.github.io/lcmm/) R package provides
+a maximum-likelihood estimate for gaussian latent class mixed models, so
+that is a good starting point for understanding these models.
 
 Proust-Lima, Philipps, and Liquet (2017) describe the statistical
 machinery for their latent class mixed models. We note the following
@@ -51,7 +101,7 @@ X_{ci} : \textrm{time-indpendent covariates} \\
 }
 $$
 
-## stan notes
+## Marginalization of discrete parameters
 
 Richard McElreath has a
 [tutorial](https://elevanth.org/blog/2018/01/29/algebra-and-missingness/)
@@ -92,35 +142,45 @@ work with discrete parameters in Stan:
 > `term[j] = logP[j] + logL[j]`. And then we can compute $\log M$ as
 > `log_sum_exp(term).`
 
-So following that recipe and the notes from the lcmm package, I can do a
-simple latent class model in Stan
+## A Gaussian mixture model
+
+Following that recipe and the notes from the lcmm package, I can do a
+simple latent class model in Stan:
+
+``` r
+# knitr::opts_chunk$set(eval = FALSE)
+```
+
+``` r
+m <- cmdstanr::cmdstan_model("0.stan")
+```
 
 ``` stan
-
 data {
   int<lower=1> n_obs;  // observations
   int<lower=1> n_groups;  // latent groups
   array[n_obs] real y;
+  int<lower=0,upper=1> will_calculate_probs;
 }
 
 transformed data {}
 
 parameters {
-  real alpha;               // fixed intercept term
+  real alpha;
   ordered[n_groups] mean_group;
   vector<lower=0>[n_groups] sigma_group;
-
   simplex[n_groups] probs;
 }
+
 transformed parameters{}
 
 model {
   array[n_groups] real group_likelihoods;
 
-  alpha ~ normal(0, .001);
+  alpha ~ normal(0, .001); // intercept to 0
   sigma_group ~ exponential(2);
-  probs ~ dirichlet(rep_vector(1.0, n_groups));
   mean_group ~ normal(0, 10);
+  probs ~ dirichlet(rep_vector(1.0, n_groups));
 
   for (i in 1:n_obs) {
     for (j in 1:n_groups) {
@@ -129,29 +189,37 @@ model {
     }
     target += log_sum_exp(group_likelihoods);
   }
-
 }
 
 generated quantities {
-  matrix[n_obs, n_groups] g_probs;
-  for (i in 1:n_obs) {
-    vector[n_groups] terms;
-    for (j in 1:n_groups) {
-      terms[j] = log(probs[j]) + normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
+  if (will_calculate_probs == 1) {
+    matrix[n_obs, n_groups] g_probs;
+    for (i in 1:n_obs) {
+      vector[n_groups] terms;
+      for (j in 1:n_groups) {
+        terms[j] = log(probs[j]) +
+          normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
+      }
+      g_probs[i, ] = to_row_vector(softmax(terms));
     }
-    g_probs[i, ] = to_row_vector(softmax(terms));
   }
 }
 ```
 
-``` r
-a <- rnorm(20, 100, 10)
-b <- rnorm(50, 5, 1)
-c <- rnorm(20, -10, 4)
-c(a, b, c)[83]
+In the double for-loop in the model block, we perform the
+marginalization recipe. We iterate through the observations and compute
+weighted likelihoods for each group by multiplying the group probability
+times the likelihood of the observation in that group.
 
-# copy the example from 
-# https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html
+Let’s try to replicate the [Gaussian Mixture Model
+demo](https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html)
+from PyMC.
+
+``` r
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
 n_groups <- 3
 n_obs <- 500
 means <- c(-5, 0, 5)
@@ -159,57 +227,211 @@ sds = c(0.5, 2.0, 0.75)
 ids <- sample(1:n_groups, n_obs, replace = TRUE)
 y <- rnorm(n_obs, means[ids], sds[ids])
 
-m <- cmdstanr::cmdstan_model("0.stan")
+true_values <- tibble(
+  parameter = c(
+    sprintf("mean_group[%s]", 1:3),
+    sprintf("probs[%s]", 1:3),
+    sprintf("sigma_group[%s]", 1:3)
+  ),
+  ground_truth = c(
+    means, rep(.33, 3), sds
+  )
+)
+
 data <- list(
   n_obs = length(y),
   n_groups = 3,
-  y = y
+  y = y,
+  will_calculate_probs = 0
 )
-e <- m$sample(data, refresh = 0)
-e_sum <- e$summary()
-e_sum |> print(n = Inf)
-library(dplyr)
 
-# e$draws() |> posterior::as_draws_df()
-library(ggplot2)
+posterior_gmm <- m$sample(data, refresh = 0, parallel_chains = 4)
+## Running MCMC with 4 parallel chains...
+## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 1
+## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 1
+## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 2 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 2
+## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 3
+## Chain 1 finished in 14.5 seconds.
+## Chain 2 finished in 21.6 seconds.
+## Chain 4 finished in 21.8 seconds.
+## Chain 3 finished in 22.0 seconds.
+## 
+## All 4 chains finished successfully.
+## Mean chain execution time: 20.0 seconds.
+## Total execution time: 22.2 seconds.
+```
+
+``` r
+tidy_gmm_draws <- function(x) {
+  x$draws() |> 
+    posterior::as_draws_df() |>
+    tibble::as_tibble() |> 
+    select(
+      .draw, .chain,
+      starts_with("mean_"), 
+      starts_with("probs"), 
+      starts_with("sigma")
+    ) |> 
+    tidyr::pivot_longer(
+      cols = c(-.draw, -.chain), 
+      names_pattern = "(.+)\\[(\\d+)\\]",
+      names_to = c("family", "index")
+    ) |> 
+    mutate(parameter = sprintf("%s[%s]", family, index))
+}
+
+draws_gmm <- posterior_gmm |> 
+  tidy_gmm_draws()  |> 
+    left_join(true_values, by = "parameter")
+
 p <- ggplot(tibble(x = y)) + 
-  aes(x = x) + geom_point(aes(y = 0), position = position_jitter(width = 0, height = .2)) + 
-  ylim(-.4, .4) +
+  aes(x = x) + 
+  ggdist::geom_swarm(color = "black") +
   ggtitle("data") +
   xlab("observed value") +
-  ylab("(jittered)")
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
 
-x <- e$draws() |> 
-  posterior::as_draws_df() |>
-  select(.draw, starts_with("mean_"), starts_with("probs"), starts_with("sigma")) |> 
-  tidyr::pivot_longer(
-    cols = c(-.draw), 
-    names_pattern = "(.+)\\[(\\d+)\\]",
-    names_to = c("family", "index")
-  ) |> 
-  mutate(parameter = sprintf("%s[%s]", family, index))
 
-ggplot(x) + aes(x = value, y = parameter) + 
-  ggdist::stat_halfeye() + 
-  facet_wrap("family", scales = "free")
+p2 <- ggplot(draws_gmm) + 
+  aes(x = value, y = index) + 
+  ggdist::stat_pointinterval() + 
+  facet_wrap("family", scales = "free") +
+  geom_point(
+    aes(x = ground_truth, color = "ground truth"), 
+    position = position_nudge(y = .2),
+    color = "orangered"
+  ) +
+  ggtitle("model") +
+  guides(color = "none")
 
-p2 <- bayesplot::mcmc_intervals_data(e$draws(), pars = vars(starts_with("mean_group"), starts_with("probs"))) |>
-  mutate(facet = stringr::str_remove_all(parameter, "\\[\\d+\\]")) |> 
-  ggplot() + aes(x = m, y = parameter) + 
-  facet_wrap("facet", scales = "free") +
-  geom_linerange(aes(xmin = ll, xmax = hh)) +
-  geom_linerange(aes(xmin = l, xmax = h), linewidth = 1) +
-  ggtitle("model")
-
-library(patchwork)
 p + p2 + plot_layout(widths = c(1, 2))
-
-# bayesplot::mcmc_intervals(
-#   e$draws(), 
-#   vars(starts_with("mean_group"), starts_with("probs"))
-# ) + facet_wrap(~ startsWith(parameter, "prob"))
-# bayesplot::mcmc_trace(e$draws())
 ```
+
+<img src="README_files/figure-gfm/gmm1-1.png" width="100%" />
+
+There is another PyMC demo that sets the prevalences of groups too.
+Let’s try that.
+
+``` r
+n_groups <- 3
+n_obs <- 1000
+probs <- c(0.35, 0.4, 0.25)
+means <- c(0.0, 2.0, 5.0)
+sds = c(0.5, 0.5, 1.0)
+ids <- sample(1:n_groups, n_obs, prob = probs, replace = TRUE)
+table(ids) / n_obs
+## ids
+##     1     2     3 
+## 0.319 0.405 0.276
+y <- rnorm(n_obs, means[ids], sds[ids])
+
+true_values <- tibble::tibble(
+  parameter = c(
+    sprintf("mean_group[%s]", 1:3),
+    sprintf("probs[%s]", 1:3),
+    sprintf("sigma_group[%s]", 1:3)
+  ),
+  ground_truth = c(means, probs, sds)
+)
+
+data <- list(
+  n_obs = length(y),
+  n_groups = 3,
+  y = y,
+  will_calculate_probs = 0
+)
+
+e <- m$sample(data, refresh = 0, parallel_chains = 4)
+## Running MCMC with 4 parallel chains...
+## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 1
+## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 2
+## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 2
+## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 3
+## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 3
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 3 finished in 23.7 seconds.
+## Chain 2 finished in 24.1 seconds.
+## Chain 1 finished in 24.2 seconds.
+## Chain 4 finished in 27.1 seconds.
+## 
+## All 4 chains finished successfully.
+## Mean chain execution time: 24.8 seconds.
+## Total execution time: 27.2 seconds.
+e_sum <- e$summary()
+
+draws_gmm <- e |> 
+  tidy_gmm_draws()  |> 
+    left_join(true_values, by = "parameter")
+
+p <- ggplot(tibble(x = y)) + 
+  aes(x = x) + 
+  ggdist::geom_swarm(color = "black") +
+  ggtitle("data") +
+  xlab("observed value") +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+
+p2 <- ggplot(draws_gmm) + 
+  aes(x = value, y = index) + 
+  ggdist::stat_pointinterval() + 
+  facet_wrap("family", scales = "free") +
+  geom_point(
+    aes(x = ground_truth, color = "ground truth"), 
+    position = position_nudge(y = .2),
+    color = "orangered"
+  ) +
+  ggtitle("model") +
+  guides(color = "none")
+
+p + p2 + plot_layout(widths = c(1, 2))
+```
+
+<img src="README_files/figure-gfm/gmm2-1.png" width="100%" />
 
 ## sketch
 
@@ -304,27 +526,27 @@ data <- list(
 e <- m$sample(data, refresh = 0)
 ## Running MCMC with 4 sequential chains...
 ## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 21, column 2 to column 25)
+## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 23, column 2 to column 45)
 ## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 1
-## Chain 1 finished in 0.3 seconds.
-## Chain 2 finished in 0.3 seconds.
+## Chain 1 finished in 0.5 seconds.
+## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 23, column 2 to column 45)
+## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 2
+## Chain 2 finished in 0.4 seconds.
 ## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
 ## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 21, column 2 to column 25)
 ## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 3
 ## Chain 3 finished in 0.3 seconds.
-## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 23, column 2 to column 45)
-## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 4
-## Chain 4 finished in 0.4 seconds.
+## Chain 4 finished in 0.3 seconds.
 ## 
 ## All 4 chains finished successfully.
-## Mean chain execution time: 0.3 seconds.
+## Mean chain execution time: 0.4 seconds.
 ## Total execution time: 1.8 seconds.
 e_sum <- e$summary()
 
@@ -431,19 +653,19 @@ data <- list(
 e <- m$sample(data, refresh = 0)
 ## Running MCMC with 4 sequential chains...
 ## 
-## Chain 1 finished in 0.7 seconds.
+## Chain 1 finished in 0.4 seconds.
 ## Chain 2 finished in 0.7 seconds.
 ## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
 ## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 21, column 2 to column 25)
 ## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 3
-## Chain 3 finished in 0.6 seconds.
-## Chain 4 finished in 0.9 seconds.
+## Chain 3 finished in 0.5 seconds.
+## Chain 4 finished in 0.7 seconds.
 ## 
 ## All 4 chains finished successfully.
-## Mean chain execution time: 0.7 seconds.
-## Total execution time: 3.1 seconds.
+## Mean chain execution time: 0.6 seconds.
+## Total execution time: 2.6 seconds.
 e_sum <- e$summary()
 
 d_post_individuals <- e_sum |> 
@@ -504,6 +726,16 @@ e_sum |> print(n = Inf)
 ```
 
 <div id="refs" class="references csl-bib-body hanging-indent">
+
+<div id="ref-mahr2020" class="csl-entry">
+
+Mahr, Tristan J., Paul J. Rathouz, and Katherine C. Hustad. 2020.
+“Longitudinal Growth in Intelligibility of Connected Speech from 2 to 8
+Years in Children with Cerebral Palsy: A Novel Bayesian Approach.”
+*Journal of Speech, Language, and Hearing Research* 63 (9): 2880–93.
+[https://doi.org/10.1044/2020\\\_JSLHR-20-00181](https://doi.org/10.1044/2020\_JSLHR-20-00181).
+
+</div>
 
 <div id="ref-JSSv078i02" class="csl-entry">
 
