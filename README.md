@@ -55,10 +55,9 @@ that is a good starting point for understanding these models.
 
 Proust-Lima, Philipps, and Liquet (2017) describe the statistical
 machinery for their latent class mixed models. We note the following
-equations from their paper.
-
-Below is the likelihood contribution for one individual in the basic
-linear mixed model that we know and love:
+equations from their paper. Below is the likelihood contribution for one
+individual (group) in the basic linear mixed model that we know and
+love:
 
 $$
 \displaylines{
@@ -101,7 +100,21 @@ X_{ci} : \textrm{time-indpendent covariates} \\
 }
 $$
 
+This model is something to worry about until later.
+
 ## Marginalization of discrete parameters
+
+<!-- Stan uses Hamiltonian Monte Carlo (HMC) to sample from the posterior -->
+<!-- distribution. HMC is conceptually [a physics -->
+<!-- simulation](https://mc-stan.org/docs/reference-manual/hamiltonian-monte-carlo.html) -->
+<!-- where a sampling chain explores the probability surface and its -->
+<!-- gradients like a skateboarder rolling around a skatepark. -->
+
+Stan [does not support sampling latent discrete
+parameters](https://mc-stan.org/docs/stan-users-guide/latent-discrete.html),
+and the latent group memberships above are discrete parameters. But we
+don’t need them because we can average over them (or “marginalize” over
+them).
 
 Richard McElreath has a
 [tutorial](https://elevanth.org/blog/2018/01/29/algebra-and-missingness/)
@@ -109,38 +122,71 @@ where observations are in different states but for some observations,
 that state is missing/unobserved. He provides following recipe for how
 work with discrete parameters in Stan:
 
-> 1)  Write the probability of an outcome `y[i]` conditional on known
->     values of the discrete parameters. Call this $L$, the conditional
->     likelihood.
->
-> 2)  List all the possible states the discrete parameters could take.
->     For example, if you have two binary parameters, then there are
->     four possible states: 11, 10, 01, and 00. Let $j$ be an index for
->     state, so that in this example $j$ can take the values 1, 2, 3,
->     and 4.
->
-> 3)  For each state in (2), compute the probability of that state. Your
->     model provides these probabilities, and they will depend upon the
->     details of your model. Call each state’s probability $P_j$.
->
-> 4)  For each state in (2), compute the probability of an outcome
->     `y[i]` when the discrete parameters take on those values. For
->     example, there is a different probability for each of 11, 10, 01,
->     and 00. You can use the expression from (1) and just insert the
->     values of the parameters for each state. Call each state’s
->     corresponding likelihood $L_j$.
->
-> 5)  Now you can compute the unconditional probability of `y[i]` by
->     multiplying each $P_j$ by $L_j$. Then sum these products for all
->     states: $M=\sum_j P_j L_j$. This $M$ is the marginal likelihood,
->     the probability of `y[i]` averaging over the unknown values of the
->     discrete parameters.
->
-> In the actual code, we must do all of the above on the log-probability
-> scale, or otherwise numerical precision will be poor. So in practice
-> each $P_j L_j$ term is computed as a sum of log probabilities:
-> `term[j] = logP[j] + logL[j]`. And then we can compute $\log M$ as
-> `log_sum_exp(term).`
+<blockquote>
+
+1)  Write the probability of an outcome `y[i]` conditional on known
+    values of the discrete parameters. Call this $L$, the conditional
+    likelihood.
+
+2)  List all the possible states the discrete parameters could take. For
+    example, if you have two binary parameters, then there are four
+    possible states: 11, 10, 01, and 00. Let $j$ be an index for state,
+    so that in this example $j$ can take the values 1, 2, 3, and 4.
+
+3)  For each state in (2), compute the probability of that state. Your
+    model provides these probabilities, and they will depend upon the
+    details of your model. Call each state’s probability $P_j$.
+
+4)  For each state in (2), compute the probability of an outcome `y[i]`
+    when the discrete parameters take on those values. For example,
+    there is a different probability for each of 11, 10, 01, and 00. You
+    can use the expression from (1) and just insert the values of the
+    parameters for each state. Call each state’s corresponding
+    likelihood $L_j$.
+
+5)  Now you can compute the unconditional probability of `y[i]` by
+    multiplying each $P_j$ by $L_j$. Then sum these products for all
+    states: $M=\sum_j P_j L_j$. This $M$ is the marginal likelihood, the
+    probability of `y[i]` averaging over the unknown values of the
+    discrete parameters.
+
+In the actual code, we must do all of the above on the log-probability
+scale, or otherwise numerical precision will be poor. So in practice
+each $P_j L_j$ term is computed as a sum of log probabilities:
+`term[j] = logP[j] + logL[j]`. And then we can compute $\log M$ as
+`log_sum_exp(term).`
+</blockquote>
+
+Ben Lambert \[p.401–406\] also describes the process more generally:
+
+<blockquote>
+
+It is still possible to use \[discrete parameters in Stan\] by
+marginalizing them out of the joint log density. This amounts to summing
+the joint density over all possible values of the discrete parameter
+$\theta$:
+
+$$
+p(\beta) = \sum_{i=1}^{k}p(\beta,\theta_i)
+$$
+
+However, we must do so on the log probability scale because this is what
+Stan uses:
+
+$$
+\begin{align*}
+\log p(\beta) &= \log \sum_{i=1}^{k} p(\beta, \theta_i) \\
+&= \log \sum_{i=1}^{k}\exp (\log p(\beta, \theta_i)) \\
+&= \texttt{log\\_sum\\_exp}(\log p(\beta, \theta_i))
+\end{align*}
+$$
+</blockquote>
+
+The thing I want to highlight from this formulation is that the left
+sides of the equations contain a marginal probability of a continuous
+parameter $\beta$ with no $\theta$s—hence “marginalization”. We sum over
+all the values of the discrete parameter $\theta$ and no longer rely on
+it.
 
 ## A Gaussian mixture model
 
@@ -160,24 +206,21 @@ data {
   int<lower=1> n_obs;  // observations
   int<lower=1> n_groups;  // latent groups
   array[n_obs] real y;
-  int<lower=0,upper=1> will_calculate_probs;
 }
 
 transformed data {}
 
 parameters {
-  real alpha;
   ordered[n_groups] mean_group;
   vector<lower=0>[n_groups] sigma_group;
   simplex[n_groups] probs;
 }
 
-transformed parameters{}
+transformed parameters {}
 
 model {
   array[n_groups] real group_likelihoods;
 
-  alpha ~ normal(0, .001); // intercept to 0
   sigma_group ~ exponential(2);
   mean_group ~ normal(0, 10);
   probs ~ dirichlet(rep_vector(1.0, n_groups));
@@ -192,16 +235,14 @@ model {
 }
 
 generated quantities {
-  if (will_calculate_probs == 1) {
-    matrix[n_obs, n_groups] g_probs;
-    for (i in 1:n_obs) {
-      vector[n_groups] terms;
-      for (j in 1:n_groups) {
-        terms[j] = log(probs[j]) +
-          normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
-      }
-      g_probs[i, ] = to_row_vector(softmax(terms));
+  matrix[n_obs, n_groups] g_probs;
+  for (i in 1:n_obs) {
+    vector[n_groups] terms;
+    for (j in 1:n_groups) {
+      terms[j] = log(probs[j]) +
+        normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
     }
+    g_probs[i, ] = to_row_vector(softmax(terms));
   }
 }
 ```
@@ -211,71 +252,71 @@ marginalization recipe. We iterate through the observations and compute
 weighted likelihoods for each group by multiplying the group probability
 times the likelihood of the observation in that group.
 
+Note also in the `parameters` block that the `mean_group` variable has
+the type `ordered`. This constraint helps prevent the group ordering
+from being randomly reordered on each posterior sample.
+
 Let’s try to replicate the [Gaussian Mixture Model
 demo](https://www.pymc.io/projects/examples/en/latest/mixture_models/gaussian_mixture_model.html)
-from PyMC.
+from PyMC. First, we simulate the data and run the Stan model.
 
 ``` r
 library(dplyr)
 library(ggplot2)
 library(patchwork)
 
-n_groups <- 3
-n_obs <- 500
-means <- c(-5, 0, 5)
-sds = c(0.5, 2.0, 0.75)
-ids <- sample(1:n_groups, n_obs, replace = TRUE)
-y <- rnorm(n_obs, means[ids], sds[ids])
+# Simulate GMM data and bundle data-generating parameters in a table
+gmm_setup <- function(n_groups, n_obs, means, sds, probs = NULL) {
+  if (is.null(probs)) {
+    probs <- rep(1 / n_groups, n_groups)
+  }
+  ids <- sample(1:n_groups, n_obs, replace = TRUE, prob = probs)
+  y <- rnorm(n_obs, means[ids], sds[ids])
 
-true_values <- tibble(
-  parameter = c(
-    sprintf("mean_group[%s]", 1:3),
-    sprintf("probs[%s]", 1:3),
-    sprintf("sigma_group[%s]", 1:3)
-  ),
-  ground_truth = c(
-    means, rep(.33, 3), sds
+  true_values <- data.frame(
+    parameter = c(
+      sprintf("mean_group[%s]", 1:3),
+      sprintf("probs[%s]", 1:3),
+      sprintf("sigma_group[%s]", 1:3)
+    ),
+    ground_truth = c(means, probs, sds)
   )
+  
+  list(
+    data_stan = list(
+      n_obs = length(y),
+      n_groups = n_groups,
+      y = y
+    ),
+    data_truth = true_values
+  )
+}
+
+gmm <- gmm_setup(
+  n_groups = 3, 
+  n_obs = 500, 
+  means = c(-5, 0, 5), 
+  sds = c(0.5, 2.0, 0.75)
 )
 
-data <- list(
-  n_obs = length(y),
-  n_groups = 3,
-  y = y,
-  will_calculate_probs = 0
-)
-
-posterior_gmm <- m$sample(data, refresh = 0, parallel_chains = 4)
+posterior_gmm <- m$sample(gmm$data_stan, refresh = 0, parallel_chains = 4)
 ## Running MCMC with 4 parallel chains...
-## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
-## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 1
-## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
-## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 1
-## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 2 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
-## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 2
-## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
-## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 3
-## Chain 1 finished in 14.5 seconds.
-## Chain 2 finished in 21.6 seconds.
-## Chain 4 finished in 21.8 seconds.
-## Chain 3 finished in 22.0 seconds.
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 2 finished in 10.5 seconds.
+## Chain 4 finished in 10.7 seconds.
+## Chain 1 finished in 11.1 seconds.
+## Chain 3 finished in 11.9 seconds.
 ## 
 ## All 4 chains finished successfully.
-## Mean chain execution time: 20.0 seconds.
-## Total execution time: 22.2 seconds.
+## Mean chain execution time: 11.1 seconds.
+## Total execution time: 12.1 seconds.
 ```
+
+Now we can plot the data and model estimates.
 
 ``` r
 tidy_gmm_draws <- function(x) {
@@ -296,433 +337,610 @@ tidy_gmm_draws <- function(x) {
     mutate(parameter = sprintf("%s[%s]", family, index))
 }
 
-draws_gmm <- posterior_gmm |> 
+plot_gmm_results <- function(data_draws, data_stan) {
+  p <- ggplot(tibble(x = data_stan$y)) + 
+    aes(x = x) + 
+    ggdist::geom_swarm(color = "black") +
+    ggtitle("data") +
+    xlab("observed value") +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+  p2 <- ggplot(data_draws) + 
+    aes(x = value, y = index) + 
+    ggdist::stat_pointinterval() + 
+    facet_wrap("family", scales = "free") +
+    geom_point(
+      aes(x = ground_truth, color = "ground truth"), 
+      position = position_nudge(y = .2),
+      color = "orangered"
+    ) +
+    ggtitle("model") +
+    guides(color = "none")
+
+  p + p2 + plot_layout(widths = c(1, 2))
+}
+
+data_draws <- posterior_gmm |> 
   tidy_gmm_draws()  |> 
-    left_join(true_values, by = "parameter")
+  left_join(gmm$data_truth, by = "parameter")
 
-p <- ggplot(tibble(x = y)) + 
-  aes(x = x) + 
-  ggdist::geom_swarm(color = "black") +
-  ggtitle("data") +
-  xlab("observed value") +
-  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-
-
-p2 <- ggplot(draws_gmm) + 
-  aes(x = value, y = index) + 
-  ggdist::stat_pointinterval() + 
-  facet_wrap("family", scales = "free") +
-  geom_point(
-    aes(x = ground_truth, color = "ground truth"), 
-    position = position_nudge(y = .2),
-    color = "orangered"
-  ) +
-  ggtitle("model") +
-  guides(color = "none")
-
-p + p2 + plot_layout(widths = c(1, 2))
+plot_gmm_results(data_draws, gmm$data_stan)
 ```
 
 <img src="README_files/figure-gfm/gmm1-1.png" width="100%" />
 
-There is another PyMC demo that sets the prevalences of groups too.
-Let’s try that.
+There is another PyMC demo that sets the sampling probabilities of the
+groups too. Here is where the functions we defined above save us some
+space.
 
 ``` r
-n_groups <- 3
-n_obs <- 1000
-probs <- c(0.35, 0.4, 0.25)
-means <- c(0.0, 2.0, 5.0)
-sds = c(0.5, 0.5, 1.0)
-ids <- sample(1:n_groups, n_obs, prob = probs, replace = TRUE)
-table(ids) / n_obs
-## ids
-##     1     2     3 
-## 0.319 0.405 0.276
-y <- rnorm(n_obs, means[ids], sds[ids])
-
-true_values <- tibble::tibble(
-  parameter = c(
-    sprintf("mean_group[%s]", 1:3),
-    sprintf("probs[%s]", 1:3),
-    sprintf("sigma_group[%s]", 1:3)
-  ),
-  ground_truth = c(means, probs, sds)
+gmm2 <- gmm_setup(
+  n_groups = 3, 
+  n_obs = 1000, 
+  means = c(-5, 0, 5), 
+  sds = c(0.5, 2.0, 0.75), 
+  probs = c(0.35, 0.4, 0.25)
 )
 
-data <- list(
-  n_obs = length(y),
-  n_groups = 3,
-  y = y,
-  will_calculate_probs = 0
-)
-
-e <- m$sample(data, refresh = 0, parallel_chains = 4)
+posterior_gmm2 <- m$sample(gmm2$data_stan, refresh = 0, parallel_chains = 4)
 ## Running MCMC with 4 parallel chains...
 ## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
+## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 1
+## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 1 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 1
 ## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 2
 ## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 2
 ## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 3
 ## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 3
 ## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
+## Chain 4 Exception: normal_lpdf: Location parameter is inf, but must be finite! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpUbzQJP/model-5510569341e5.stan', line 26, column 6 to line 27, column 58)
 ## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 4
-## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/RtmpWyA0oF/model-634823e4385a.stan', line 29, column 6 to line 30, column 58)
-## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 4
-## Chain 3 finished in 23.7 seconds.
-## Chain 2 finished in 24.1 seconds.
-## Chain 1 finished in 24.2 seconds.
-## Chain 4 finished in 27.1 seconds.
+## Chain 3 finished in 17.8 seconds.
+## Chain 1 finished in 18.2 seconds.
+## Chain 4 finished in 19.9 seconds.
+## Chain 2 finished in 29.1 seconds.
 ## 
 ## All 4 chains finished successfully.
-## Mean chain execution time: 24.8 seconds.
-## Total execution time: 27.2 seconds.
-e_sum <- e$summary()
+## Mean chain execution time: 21.3 seconds.
+## Total execution time: 29.2 seconds.
 
-draws_gmm <- e |> 
+data_draws2 <- posterior_gmm2 |> 
   tidy_gmm_draws()  |> 
-    left_join(true_values, by = "parameter")
+  left_join(gmm2$data_truth, by = "parameter")
 
-p <- ggplot(tibble(x = y)) + 
-  aes(x = x) + 
-  ggdist::geom_swarm(color = "black") +
-  ggtitle("data") +
-  xlab("observed value") +
-  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-
-
-p2 <- ggplot(draws_gmm) + 
-  aes(x = value, y = index) + 
-  ggdist::stat_pointinterval() + 
-  facet_wrap("family", scales = "free") +
-  geom_point(
-    aes(x = ground_truth, color = "ground truth"), 
-    position = position_nudge(y = .2),
-    color = "orangered"
-  ) +
-  ggtitle("model") +
-  guides(color = "none")
-
-p + p2 + plot_layout(widths = c(1, 2))
+plot_gmm_results(data_draws2, gmm2$data_stan)
 ```
 
 <img src="README_files/figure-gfm/gmm2-1.png" width="100%" />
 
-## sketch
+## The gaussian mixed mixture model
 
-- stan code for a random-intercept with no latent groups model
-- update said model to have latent groups
-
-Simulate some repeated measures data. There are no latent group effects
-yet. Happy with the idea of storing stuff in dataframe and joining at
-the end, not happy with the verbosity.
+Now let’s try a gaussian mixed effects mixture model. We have
+repeated-measures observations drawn from k latent groups. First, let’s
+validate the model in the $k=1$ case, which should reduce a random
+intercept model.
 
 ``` r
-library(tidyverse)
-rep_along <- function (along, x) rep_len(x, length(along))
-
-simulate_data <- function(
-  n_individuals = 20,
-  n_obs = 100,
-  n_groups = 3,
-  sigma_y = .2,
-  group_mean = NULL,
-  group_sigma = NULL
-) {
-  if (is.null(group_mean)) {
-    group_mean <- rep_len(0, n_groups)
-    group_sigma <- rep_len(1, n_groups)
-  }
-  if (is.null(group_sigma)) {
-    group_sigma <- rep_len(1, n_groups)
-  }
-  
-  d_groups <- data.frame(
-    group = seq_len(n_groups),
-    group_mean = group_mean,
-    group_sigma = group_sigma
-  )
-  
-  d_observations <- data.frame(
-    y = rep_len(NA, n_obs),
-    individual = NA_integer_
-  )
-  
-  d_individuals <- data.frame(
-    individual = seq_len(n_individuals),
-    group = NA_integer_,
-    individual_mean = NA_real_
-  )
-
-  d_individuals$group <- sample(
-    seq_len(n_groups), 
-    n_individuals, 
-    replace = TRUE
-  )
-
-  d_observations$individual <- sample(
-    d_individuals$individual, 
-    n_obs, 
-    replace = TRUE
-  )
-
-  d_individuals$individual_mean <- rnorm(
-    n_individuals,
-    d_groups$group_mean[d_individuals$group],
-    d_groups$group_sigma[d_individuals$group]
-  )
-
-  d_observations$y <- rnorm(
-    n_obs,
-    d_individuals$individual_mean[d_observations$individual], 
-    sigma_y
-  )
-
-  d_observations |> 
-    left_join(d_individuals, by = join_by(individual)) |> 
-    left_join(d_groups, by = join_by(group)) |> 
-    mutate(sigma_y = sigma_y)
-}
-
-d <- simulate_data()
+# knitr::opts_chunk$set(eval = FALSE)
 ```
 
-Run a simple Stan model and check that it recovers the parameters.
+``` r
+m <- cmdstanr::cmdstan_model("0-b.stan")
+```
+
+``` stan
+data {
+  int<lower=1> n_obs;
+  int<lower=1> n_groups;
+  int<lower=1> n_individuals;
+  array[n_obs] int<lower=1, upper=n_individuals> individual;
+  array[n_obs] real y;
+}
+transformed data {}
+parameters {
+  ordered[n_groups] mean_group;
+  vector<lower=0>[n_groups] sigma_residuals;
+  simplex[n_groups] probs;
+
+  // the random intercepts start as z-scores
+  array[n_groups] vector[n_individuals] standard_random_intercepts;
+  // which are scaled for each group
+  vector<lower=0>[n_groups] sigma_intercepts;
+}
+transformed parameters {
+  // apply the actual scaling
+  array[n_groups] vector[n_individuals] random_intercepts;
+  for (i in 1:n_groups) {
+    random_intercepts[i] = standard_random_intercepts[i] * sigma_intercepts[i];
+  }
+}
+model {
+  array[n_groups] real group_likelihoods;
+
+  sigma_residuals ~ exponential(4);
+  sigma_intercepts ~ exponential(4);
+  mean_group ~ normal(0, 2);
+  probs ~ dirichlet(rep_vector(5.0, n_groups));
+  array[n_groups] vector[n_individuals] linear_terms;
+  for (i in 1:n_groups) {
+    standard_random_intercepts[i] ~ std_normal();
+  }
+
+  for (i in 1:n_individuals) {
+    for (j in 1:n_groups) {
+      linear_terms[j, i] = mean_group[j] + random_intercepts[j, i];
+    }
+  }
+
+  for (i in 1:n_obs) {
+    for (j in 1:n_groups) {
+      group_likelihoods[j] = log(probs[j]) +
+        normal_lpdf(y[i] | linear_terms[j, individual[i]], sigma_residuals[j]);
+    }
+    target += log_sum_exp(group_likelihoods);
+  }
+}
+generated quantities {
+  // matrix[n_obs, n_groups] g_probs;
+  // for (i in 1:n_obs) {
+  //   vector[n_groups] terms;
+  //   for (j in 1:n_groups) {
+  //     terms[j] = log(probs[j]) +
+  //       normal_lpdf(y[i] | mean_group[j], sigma_group[j]);
+  //   }
+  //   g_probs[i, ] = to_row_vector(softmax(terms));
+  // }
+}
+```
+
+When I first fit this model, I didn’t get a good fit at first. Then
+standardizing the observations fixed things. I suspect that the
+observation scale (hundreds of milliseconds) didn’t work with my
+hard-coded priors (wide for standardized variables).
 
 ``` r
-m <- cmdstanr::cmdstan_model("1.stan")
-data <- list(
-  n_obs = nrow(d),
-  n_ind = length(unique(d$individual)),
-  individual = d$individual,
-  n_groups = length(unique(d$group)),
-  y = d$y
+# Borrow the sleepstudy dataset
+d <- lme4::sleepstudy |> 
+  mutate(
+    y = Reaction |> scale() |> as.vector(),
+    individual = match(Subject, unique(Subject))
+  )
+
+e <- m$sample(
+  data = list(
+    n_obs = nrow(d),
+    n_groups = 1,
+    n_individuals = length(unique(d$Subject)),
+    individual = d$individual,
+    y = d$y
+  ), 
+  parallel_chains = 4
 )
-e <- m$sample(data, refresh = 0)
-## Running MCMC with 4 sequential chains...
+## Running MCMC with 4 parallel chains...
+## 
+## Chain 1 Iteration:    1 / 2000 [  0%]  (Warmup) 
+## Chain 2 Iteration:    1 / 2000 [  0%]  (Warmup) 
+## Chain 3 Iteration:    1 / 2000 [  0%]  (Warmup) 
+## Chain 4 Iteration:    1 / 2000 [  0%]  (Warmup)
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpOUBM73/model-1b985d271aee.stan', line 46, column 6 to line 47, column 79)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 1 Iteration:  100 / 2000 [  5%]  (Warmup) 
+## Chain 1 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 1 Iteration:  300 / 2000 [ 15%]  (Warmup) 
+## Chain 1 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 2 Iteration:  100 / 2000 [  5%]  (Warmup) 
+## Chain 2 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 2 Iteration:  300 / 2000 [ 15%]  (Warmup) 
+## Chain 2 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 3 Iteration:  100 / 2000 [  5%]  (Warmup) 
+## Chain 3 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 3 Iteration:  300 / 2000 [ 15%]  (Warmup) 
+## Chain 4 Iteration:  100 / 2000 [  5%]  (Warmup) 
+## Chain 4 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 4 Iteration:  300 / 2000 [ 15%]  (Warmup) 
+## Chain 4 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 4 Iteration:  500 / 2000 [ 25%]  (Warmup) 
+## Chain 1 Iteration:  500 / 2000 [ 25%]  (Warmup) 
+## Chain 1 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 2 Iteration:  500 / 2000 [ 25%]  (Warmup) 
+## Chain 2 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 2 Iteration:  700 / 2000 [ 35%]  (Warmup) 
+## Chain 3 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 3 Iteration:  500 / 2000 [ 25%]  (Warmup) 
+## Chain 3 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 4 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 4 Iteration:  700 / 2000 [ 35%]  (Warmup) 
+## Chain 4 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 1 Iteration:  700 / 2000 [ 35%]  (Warmup) 
+## Chain 1 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 1 Iteration:  900 / 2000 [ 45%]  (Warmup) 
+## Chain 2 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 2 Iteration:  900 / 2000 [ 45%]  (Warmup) 
+## Chain 2 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 2 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 3 Iteration:  700 / 2000 [ 35%]  (Warmup) 
+## Chain 3 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 3 Iteration:  900 / 2000 [ 45%]  (Warmup) 
+## Chain 4 Iteration:  900 / 2000 [ 45%]  (Warmup) 
+## Chain 4 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 4 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 4 Iteration: 1100 / 2000 [ 55%]  (Sampling) 
+## Chain 1 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 1 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 1 Iteration: 1100 / 2000 [ 55%]  (Sampling) 
+## Chain 2 Iteration: 1100 / 2000 [ 55%]  (Sampling) 
+## Chain 3 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 3 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 3 Iteration: 1100 / 2000 [ 55%]  (Sampling) 
+## Chain 4 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 4 Iteration: 1300 / 2000 [ 65%]  (Sampling) 
+## Chain 1 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 1 Iteration: 1300 / 2000 [ 65%]  (Sampling) 
+## Chain 2 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 2 Iteration: 1300 / 2000 [ 65%]  (Sampling) 
+## Chain 3 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 4 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 1 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 1 Iteration: 1500 / 2000 [ 75%]  (Sampling) 
+## Chain 2 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 2 Iteration: 1500 / 2000 [ 75%]  (Sampling) 
+## Chain 3 Iteration: 1300 / 2000 [ 65%]  (Sampling) 
+## Chain 3 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 4 Iteration: 1500 / 2000 [ 75%]  (Sampling) 
+## Chain 4 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 1 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 1 Iteration: 1700 / 2000 [ 85%]  (Sampling) 
+## Chain 2 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 2 Iteration: 1700 / 2000 [ 85%]  (Sampling) 
+## Chain 3 Iteration: 1500 / 2000 [ 75%]  (Sampling) 
+## Chain 3 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 4 Iteration: 1700 / 2000 [ 85%]  (Sampling) 
+## Chain 4 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 1 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 1 Iteration: 1900 / 2000 [ 95%]  (Sampling) 
+## Chain 2 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 3 Iteration: 1700 / 2000 [ 85%]  (Sampling) 
+## Chain 3 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 4 Iteration: 1900 / 2000 [ 95%]  (Sampling) 
+## Chain 4 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 4 finished in 1.1 seconds.
+## Chain 1 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 2 Iteration: 1900 / 2000 [ 95%]  (Sampling) 
+## Chain 2 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 3 Iteration: 1900 / 2000 [ 95%]  (Sampling) 
+## Chain 3 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 1 finished in 1.2 seconds.
+## Chain 2 finished in 1.3 seconds.
+## Chain 3 finished in 1.3 seconds.
+## 
+## All 4 chains finished successfully.
+## Mean chain execution time: 1.2 seconds.
+## Total execution time: 1.3 seconds.
+# e$summary() |> print(n = Inf)
+e_sum <- e$summary(
+  variables = c("mean_group", "sigma_intercepts", "sigma_residuals")
+)
+e_sum
+## # A tibble: 3 × 10
+##   variable       mean  median     sd    mad     q5   q95  rhat ess_bulk ess_tail
+##   <chr>         <num>   <num>  <num>  <num>  <num> <num> <num>    <num>    <num>
+## 1 mean_group… 0.00329 0.00231 0.160  0.154  -0.263 0.269  1.00    1139.    1605.
+## 2 sigma_inte… 0.624   0.614   0.118  0.113   0.453 0.837  1.00    1325.    1663.
+## 3 sigma_resi… 0.785   0.783   0.0439 0.0442  0.714 0.862  1.00    4574.    2565.
+```
+
+Compare with REML estimate.
+
+``` r
+lme4::lmer(y ~ 1 + (1 | Subject), d, REML = TRUE) |> 
+  broom.mixed::tidy()
+## # A tibble: 3 × 6
+##   effect   group    term            estimate std.error statistic
+##   <chr>    <chr>    <chr>              <dbl>     <dbl>     <dbl>
+## 1 fixed    <NA>     (Intercept)     3.44e-16     0.161  2.14e-15
+## 2 ran_pars Subject  sd__(Intercept) 6.35e- 1    NA     NA       
+## 3 ran_pars Residual sd__Observation 7.86e- 1    NA     NA
+```
+
+``` r
+gmmm_setup <- function(
+  n_groups, 
+  n_obs, 
+  n_individuals, 
+  means, 
+  sd_resid, 
+  sd_group, 
+  probs = NULL
+) {
+  if (is.null(probs)) {
+    probs <- rep(1 / n_groups, n_groups)
+  }
+  
+  make_unscaler <- function(y) {
+    z <- scale(y)
+    center_value <- attr(z, "scaled:center")
+    scale_value <- attr(z, "scaled:scale")
+    function(x, center = TRUE, scale = TRUE) {
+      if (!center) center_value <- 0
+      if (!scale) scale_value <- 1
+      (x * scale_value) + center_value
+    }
+  }
+  make_rescaler <- function(y) {
+    z <- scale(y)
+    center_value <- attr(z, "scaled:center")
+    scale_value <- attr(z, "scaled:scale")
+    function(x, center = TRUE, scale = TRUE) {
+      if (!center) center_value <- 0
+      if (!scale) scale_value <- 1
+      (x - center_value) / scale_value
+    }
+  }
+
+  data_groups <- tibble::tibble(
+    group = seq_len(n_groups),
+    probs = probs,
+    mean_group = means,
+    sd_group = sd_group,
+    sd_resid = sd_resid
+  )
+
+  data_individuals <- tibble::tibble(
+    individual = seq_len(n_individuals),
+    group = sample(1:n_groups, n_individuals, replace = TRUE, prob = probs)
+  ) |> 
+    left_join(data_groups, by = "group") |> 
+    mutate(
+      offset_individual = rnorm(n_individuals) * sd_group,
+      mean_individual = mean_group + offset_individual
+    )
+
+    data_observed <- tibble::tibble(
+      individual = sample(1:n_individuals, n_obs, replace = TRUE)
+    ) |> 
+      left_join(data_individuals, by = "individual") |> 
+      mutate(
+        y_raw = rnorm(n_obs, 0, sd_resid) + mean_individual,
+        y = scale(y_raw) |> as.vector()
+      )
+  
+    
+  # true_values <- data.frame(
+  #   parameter = c(
+  #     sprintf("mean_group[%s]", 1:3),
+  #     sprintf("probs[%s]", 1:3),
+  #     sprintf("sigma_group[%s]", 1:3)
+  #   ),
+  #   ground_truth = c(means, probs, sds)
+  # )
+  
+  list(
+    data_stan = list(
+      n_obs = n_obs,
+      n_groups = n_groups,
+      n_individuals = n_individuals,
+      individual = data_observed$individual,
+      y = data_observed$y
+    ),
+    data_groups = data_groups,
+    data_individuals = data_individuals,
+    data_observed = data_observed
+  )
+}
+
+gmmm <- gmmm_setup(
+  n_groups = 3, 
+  n_obs = 400, 
+  n_individuals = 60, 
+  means = c(-5, 10, 20), 
+  sd_group = c(4, 2, 1), 
+  sd_resid = c(1, 1, 1)
+)
+
+ggplot(gmmm$data_observed) + 
+  aes(x = fct_reorder(as.factor(individual), y), y = y) + 
+  geom_point() +
+  guides(x = "none") +
+  labs(x = "individual")
+```
+
+<img src="README_files/figure-gfm/gmmm1-1.png" width="40%" />
+
+``` r
+  # geom_point(aes(y = (mean_group - mean(y_raw)) / sd(y_raw))) +
+  # geom_segment(
+  #   aes(
+  #     x = individual, 
+  #     xend = individual, 
+  #     y = (mean_group - mean(y_raw)) / sd(y_raw), 
+  #     yend = (mean_individual - mean(y_raw)) / sd(y_raw)
+  #   )
+  # )
+
+# gmmm$data_observed
+```
+
+When I try to fit this model, all hell breaks loose. I need to figure
+out how to constrain/identify it.
+
+``` r
+posterior_gmmm <- m$sample(
+  gmmm$data_stan, 
+  refresh = 200, 
+  parallel_chains = 4, 
+  max_treedepth = 15
+)
+## Running MCMC with 4 parallel chains...
+## 
+## Chain 1 Iteration:    1 / 2000 [  0%]  (Warmup)
 ## Chain 1 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 23, column 2 to column 45)
+## Chain 1 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpOUBM73/model-1b985d271aee.stan', line 46, column 6 to line 47, column 79)
 ## Chain 1 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 1 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 1
-## Chain 1 finished in 0.5 seconds.
-## Chain 2 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 2 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 23, column 2 to column 45)
-## Chain 2 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 2 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 2
-## Chain 2 finished in 0.4 seconds.
+## Chain 2 Iteration:    1 / 2000 [  0%]  (Warmup) 
+## Chain 3 Iteration:    1 / 2000 [  0%]  (Warmup)
 ## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 21, column 2 to column 25)
+## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpOUBM73/model-1b985d271aee.stan', line 46, column 6 to line 47, column 79)
 ## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
 ## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
 ## Chain 3
-## Chain 3 finished in 0.3 seconds.
-## Chain 4 finished in 0.3 seconds.
+## Chain 4 Iteration:    1 / 2000 [  0%]  (Warmup)
+## Chain 4 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
+## Chain 4 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/Tristan/AppData/Local/Temp/RtmpOUBM73/model-1b985d271aee.stan', line 46, column 6 to line 47, column 79)
+## Chain 4 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
+## Chain 4 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
+## Chain 4
+## Chain 3 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 1 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 3 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 1 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 3 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 1 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 3 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 2 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 1 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 3 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 3 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 3 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 1 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 1 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 1 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 3 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 1 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 3 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 1 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 3 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 4 Iteration:  200 / 2000 [ 10%]  (Warmup) 
+## Chain 1 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 3 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 3 finished in 107.0 seconds.
+## Chain 1 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 1 finished in 107.3 seconds.
+## Chain 2 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 4 Iteration:  400 / 2000 [ 20%]  (Warmup) 
+## Chain 4 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 2 Iteration:  600 / 2000 [ 30%]  (Warmup) 
+## Chain 4 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 4 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 4 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 2 Iteration:  800 / 2000 [ 40%]  (Warmup) 
+## Chain 4 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 2 Iteration: 1000 / 2000 [ 50%]  (Warmup) 
+## Chain 2 Iteration: 1001 / 2000 [ 50%]  (Sampling) 
+## Chain 4 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 2 Iteration: 1200 / 2000 [ 60%]  (Sampling) 
+## Chain 4 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 4 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 2 Iteration: 1400 / 2000 [ 70%]  (Sampling) 
+## Chain 4 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 4 finished in 477.5 seconds.
+## Chain 2 Iteration: 1600 / 2000 [ 80%]  (Sampling) 
+## Chain 2 Iteration: 1800 / 2000 [ 90%]  (Sampling) 
+## Chain 2 Iteration: 2000 / 2000 [100%]  (Sampling) 
+## Chain 2 finished in 555.3 seconds.
 ## 
 ## All 4 chains finished successfully.
-## Mean chain execution time: 0.4 seconds.
-## Total execution time: 1.8 seconds.
-e_sum <- e$summary()
+## Mean chain execution time: 311.8 seconds.
+## Total execution time: 555.4 seconds.
+## Warning: 157 of 4000 (4.0%) transitions ended with a divergence.
+## See https://mc-stan.org/misc/warnings for details.
 
-d_post_individuals <- e_sum |> 
-  filter(variable |> startsWith("coef_b[")) |> 
-  mutate(
-    individual = readr::parse_number(variable),
-    type = "alpha + ranef"
-  ) |> 
-  left_join(
-    d |> distinct(individual, individual_mean), 
-    by = join_by(individual)
-  )
+draws <- posterior_gmmm$draws() |> 
+  posterior::as_draws_df()
 
-ggplot(d_post_individuals) + 
-  aes(x = individual) + 
-  geom_linerange(
-    aes(ymin = q5, ymax = q95, color = "posterior 90%\n(inferred latent mean)"), 
-  ) +
-  geom_point(
-    aes(y = individual_mean, color = "latent mean"),
-    size = 3,
-    alpha = .8
-  ) + 
-  geom_point(
-    aes(y = y, color = "observed mean"),
-    data = d,
-    alpha = .8,
-    stat = "summary",
-    size = 3,
-  ) +
-  guides(
-    color = guide_legend(
-      override.aes = list(shape = c(19, 19, NA), linewidth = c(NA, NA, .5))
-    )
-  ) + 
-  facet_wrap("type") +
-  scale_color_manual(
-    "quantities",
-    values = palette.colors(3)[c(2, 3, 1)] |> unname()
-  )
-## No summary function supplied, defaulting to `mean_se()`
+bayesplot::mcmc_dens_chains(draws, vars(starts_with("mean_group")))
 ```
 
-<img src="README_files/figure-gfm/simple-ri-model-1.png" width="80%" />
+<img src="README_files/figure-gfm/unnamed-chunk-13-1.png" width="40%" />
 
 ``` r
-e_sum |> 
-  filter(variable %in% c("alpha", "sigma_b", "sigma_y")) |> 
-  left_join(
-    d |> 
-      distinct(group_mean, group_sigma, sigma_y) |> 
-      rename(sigma_b = group_sigma, alpha = group_mean) |> 
-      tidyr::pivot_longer(
-        everything(), 
-        names_to = "variable", 
-        values_to = "value"
-      )
-  ) |> 
-  ggplot() + 
-    aes(x = variable) + 
-    geom_linerange(aes(ymin = q5, ymax = q95)) +
-    geom_point(
-      aes(y = value),
-      color = "blue",
-      size = 3,
-      alpha = .3
-    )
-## Joining with `by = join_by(variable)`
+bayesplot::mcmc_dens_chains(draws, vars(starts_with("probs")))
 ```
 
-<img src="README_files/figure-gfm/simple-ri-model-2-1.png" width="40%" />
-
-## Assignment to groups
-
-Let’s assume the individuals belong to latent groups.
+<img src="README_files/figure-gfm/unnamed-chunk-13-2.png" width="40%" />
 
 ``` r
-d <- simulate_data(
-  n_groups = 3, 
-  group_mean = c(-3, 1, 3.5)
-)
-
-ggplot(d) + 
-  aes(x = individual, y = y) + 
-  geom_point(aes(color = factor(group))) +
-  geom_point(aes(y = individual_mean))
+bayesplot::mcmc_dens_chains(draws, vars(starts_with("sigma")))
 ```
 
-<img src="README_files/figure-gfm/latent-groups-1.png" width="80%" />
-
-The random intercept model does okay.
+<img src="README_files/figure-gfm/unnamed-chunk-13-3.png" width="40%" />
 
 ``` r
-m <- cmdstanr::cmdstan_model("1.stan")
 
-data <- list(
-  n_obs = nrow(d),
-  n_ind = length(unique(d$individual)),
-  individual = d$individual,
-  n_groups = length(unique(d$group)),
-  y = d$y
-)
-e <- m$sample(data, refresh = 0)
-## Running MCMC with 4 sequential chains...
-## 
-## Chain 1 finished in 0.4 seconds.
-## Chain 2 finished in 0.7 seconds.
-## Chain 3 Informational Message: The current Metropolis proposal is about to be rejected because of the following issue:
-## Chain 3 Exception: normal_lpdf: Scale parameter is 0, but must be positive! (in 'C:/Users/trist/AppData/Local/Temp/Rtmp6Ln99R/model-212c51d55633.stan', line 21, column 2 to column 25)
-## Chain 3 If this warning occurs sporadically, such as for highly constrained variable types like covariance matrices, then the sampler is fine,
-## Chain 3 but if this warning occurs often then your model may be either severely ill-conditioned or misspecified.
-## Chain 3
-## Chain 3 finished in 0.5 seconds.
-## Chain 4 finished in 0.7 seconds.
-## 
-## All 4 chains finished successfully.
-## Mean chain execution time: 0.6 seconds.
-## Total execution time: 2.6 seconds.
-e_sum <- e$summary()
 
-d_post_individuals <- e_sum |> 
-  filter(variable |> startsWith("coef_b[")) |> 
-  mutate(
-    individual = readr::parse_number(variable),
-    type = "alpha + ranef"
-  ) |> 
-  left_join(
-    d |> distinct(individual, individual_mean), 
-    by = join_by(individual)
-  )
+# e <- posterior_gmmm$summary()
+# e |> print(n = 20)
+# 
+# 
+# e |> 
+#   filter(
+#     variable |> startsWith("mean_") | 
+#     variable |> startsWith("sigma") |
+#     variable |> startsWith("probs") 
+#   ) |> 
+#   ggplot() + 
+#   aes(x = median) +
+#   geom_segment(aes(y = variable, yend = variable, x = q5, xend = q95)) +
+#   geom_point(aes(y = variable)) +
+#   geom_point(
+#     aes(
+#       y = sprintf("mean_group[%s]", group),
+#       x = rescale(mean_group)
+#     ),
+#     data = gmmm$data_groups,
+#     color = "orangered"
+#   ) +
+#   geom_point(
+#     aes(
+#       y = sprintf("sigma_intercepts[%s]", group),
+#       x = rescale(sd_group, center = FALSE)
+#     ),
+#     data = gmmm$data_groups,
+#     color = "orangered"
+#   ) +
+#   geom_point(
+#     aes(
+#       y = sprintf("sigma_residuals[%s]", group),
+#       x = rescale(sd_group, center = FALSE)
+#     ),
+#     data = gmmm$data_groups,
+#     color = "orangered"
+#   )
 
-ggplot(d_post_individuals) + 
-  aes(x = individual) + 
-  geom_linerange(
-    aes(ymin = q5, ymax = q95, color = "posterior 90%\n(inferred latent mean)"), 
-  ) +
-  geom_point(
-    aes(y = individual_mean, color = "latent mean"),
-    size = 3,
-    alpha = .8
-  ) + 
-  geom_point(
-    aes(y = y, color = "observed mean"),
-    data = d,
-    alpha = .8,
-    stat = "summary",
-    size = 3,
-  ) +
-  guides(
-    color = guide_legend(
-      override.aes = list(shape = c(19, 19, NA), linewidth = c(NA, NA, .5))
-    )
-  ) + 
-  facet_wrap("type") +
-  scale_color_manual(
-    "quantities",
-    values = palette.colors(3)[c(2, 3, 1)] |> unname()
-  )
-## No summary function supplied, defaulting to `mean_se()`
-```
-
-<img src="README_files/figure-gfm/simple-ri-model-3-1.png" width="80%" />
-
-``` r
-m <- cmdstanr::cmdstan_model("2.stan")
-data <- list(
-  n_obs = nrow(d),
-  n_ind = length(unique(d$individual)),
-  individual = d$individual,
-  n_groups = length(unique(d$group)),
-  y = d$y
-)
-e <- m$sample(data, refresh = 0)
-e_sum <- e$summary()
-e_sum |> print(n = Inf)
+# m2 <- brm(
+#   formula = y ~ 1 + (1|individual), 
+#   data = gmmm$data_observed,
+#   family = mixture(gaussian(), gaussian()), 
+#   backend = "cmdstanr"
+# )
 ```
 
 <div id="refs" class="references csl-bib-body hanging-indent">

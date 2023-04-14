@@ -26,10 +26,10 @@ transformed parameters {
 model {
   array[n_groups] real group_likelihoods;
 
-  sigma_residuals ~ exponential(2);
-  sigma_intercepts ~ exponential(2);
-  mean_group ~ normal(0, 10);
-  probs ~ dirichlet(rep_vector(1.0, n_groups));
+  sigma_residuals ~ exponential(4);
+  sigma_intercepts ~ exponential(4);
+  mean_group ~ normal(0, 2);
+  probs ~ dirichlet(rep_vector(5.0, n_groups));
   array[n_groups] vector[n_individuals] linear_terms;
   for (i in 1:n_groups) {
     standard_random_intercepts[i] ~ std_normal();
